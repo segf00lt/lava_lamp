@@ -304,11 +304,16 @@ char _project_root_path[OS_PATH_LEN];
 Str8 project_root_path;
 
 
+/* * * * * * * * * * * * * * * * * 
+ * function headers
+ */
+
 int build_raylib(void);
 int bootstrap_project(void);
 int build_metaprogram(void);
 int run_metaprogram(void);
 int build_hot_reload(void);
+int build_hot_reload_cradle(void);
 int build_hot_reload_no_cradle(void);
 int build_release(void);
 //int build_wasm(void);
@@ -541,6 +546,18 @@ int build_hot_reload_no_cradle(void) {
   return 1;
 }
 
+int build_hot_reload_cradle(void) {
+  Nob_Cmd cmd = {0};
+
+  nob_log(NOB_INFO, "building in hot reload mode");
+
+  nob_cmd_append(&cmd, CC, DEV_FLAGS, "-fPIC", "-DGAME_MODULE_PATH=\""GAME_MODULE_PATH"\"", "cradle.c", RAYLIB_DEBUG_LINK_OPTIONS, "-o", EXE, "-lm");
+
+  if(!nob_cmd_run_sync_and_reset(&cmd)) return 0;
+
+  return 1;
+}
+
 int build_hot_reload(void) {
   Nob_Cmd cmd = {0};
 
@@ -645,6 +662,7 @@ int bootstrap_project(void) {
 
   if(!build_raylib()) return 0;
   if(!build_metaprogram()) return 0;
+  if(!build_hot_reload_cradle) return 0;
 
   return 1;
 }

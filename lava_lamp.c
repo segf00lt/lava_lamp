@@ -14,7 +14,19 @@
  */
 
 #define TARGET_FPS 60
+#define MIN_FPS 10
+#define TARGET_DT ((float)1.0f/(float)TARGET_FPS)
+#define MIN_DT ((float)1.0f/(float)MIN_FPS)
 #define MAX_CIRCLES 2048
+#define SCREEN_RECT ((Rectangle){ 0, 0, (float)GetScreenWidth(), (float)GetScreenHeight() })
+#define SCREEN_SIZE ((Vector2){ (float)GetScreenWidth(), (float)GetScreenHeight() })
+#define SCREEN_TOP_LEFT ((Vector2){ 0, 0, })
+#define SCREEN_TOP_RIGHT ((Vector2){ (float)GetScreenWidth(), 0, })
+#define SCREEN_BOTTOM_RIGHT ((Vector2){ (float)GetScreenWidth(), (float)GetScreenHeight(), })
+#define SCREEN_BOTTOM_LEFT ((Vector2){ 0, (float)GetScreenHeight(), })
+
+#define G ((float)20.0)
+#define MASS_TO_RAD ((float)300.23)
 
 
 /* * * * * * * * * * *
@@ -22,6 +34,11 @@
  */
 
 typedef struct Circle {
+  Vector2 accel;
+  Vector2 vel;
+  f32     friction;
+  f32     mass;
+
   Vector2 center;
   f32     radius;
   f32     softness;
@@ -41,19 +58,30 @@ typedef struct GPU_circle {
 
 typedef struct Game {
   f32 dt;
+  f32 shader_dt;
   b32 quit;
-
 
   Shader blob_shader;
   Circle circles_buf[MAX_CIRCLES];
   GPU_circle gpu_circles_buf[MAX_CIRCLES];
   Texture2D circles_tex;
+  Texture2D white_tex;
 
+
+  int shader_dt_loc;
   int circles_count;
   int circles_tex_loc;
   int circles_count_loc;
 
+  b32 created_balls;
+
+  bool paused;
+
 } Game;
+
+STATIC_ASSERT(MB(1) >= sizeof(Game), game_state_struct_is_less_than_1_megabyte);
+
+u64 game_state_size = MAX(MB(1), sizeof(Game));
 
 /* * * * * * * * * * *
  * globals
@@ -70,10 +98,18 @@ void game_update_and_draw(Game* gp);
 void game_load_assets(Game* gp);
 void game_unload_assets(Game* gp);
 
+float get_random_float(float min, float max, int steps);
+
 
 /* * * * * * * * * * *
  * function bodies
  */
+
+force_inline float get_random_float(float min, float max, int steps) {
+  int val = GetRandomValue(0, steps);
+  float result = Remap((float)val, 0.0f, (float)steps, min, max);
+  return result;
+}
 
 Game *game_init(void) {
 
@@ -89,36 +125,10 @@ Game *game_init(void) {
   SetTraceLogLevel(LOG_DEBUG);
   SetExitKey(0);
 
-  Game *gp = os_alloc(sizeof(Game));
-  memory_set(gp, 0, sizeof(Game));
+  Game *gp = os_alloc(game_state_size);
+  memory_set(gp, 0, game_state_size);
 
   game_load_assets(gp);
-
-  Circle circles[] = {
-    { .color = ORANGE, .center = { 300, 500, }, .radius = 190, .softness = 10.f, },
-    { .color = BLUE, .center = { 380, 770, }, .radius = 130, .softness = 10.f, },
-    //{ .color = RED   , .center = {0 }, },
-    //{ .color = GREEN , .center = {0 }, },
-    //{ .color = YELLOW, .center = {0 }, },
-  };
-
-  memory_copy(gp->circles_buf, circles, sizeof(circles));
-
-  gp->circles_count = ARRLEN(circles);
-  //int circles_count = 1;
-
-  for(int i = 0; i < gp->circles_count; i++) {
-    Circle c = gp->circles_buf[i];
-    Vector4 color = ColorNormalize(c.color);
-    gp->gpu_circles_buf[i].center_x = (u16)FloatToHalf(c.center.x);
-    gp->gpu_circles_buf[i].center_y = (u16)FloatToHalf(c.center.y);
-    gp->gpu_circles_buf[i].radius   = (u16)FloatToHalf(c.radius);
-    gp->gpu_circles_buf[i].softness = (u16)FloatToHalf(c.softness);
-    gp->gpu_circles_buf[i].color_x  = (u16)FloatToHalf(color.x);
-    gp->gpu_circles_buf[i].color_y  = (u16)FloatToHalf(color.y);
-    gp->gpu_circles_buf[i].color_z  = (u16)FloatToHalf(color.z);
-    gp->gpu_circles_buf[i].color_w  = (u16)FloatToHalf(color.w);
-  }
 
   Image circles_tex_img =
   {
@@ -131,10 +141,15 @@ Game *game_init(void) {
 
   gp->circles_tex = LoadTextureFromImage(circles_tex_img);
 
+  Image white_tex_img = GenImageColor(1, 1, WHITE);
+  gp->white_tex = LoadTextureFromImage(white_tex_img);
+  UnloadImage(white_tex_img);
+
   //int screen_rect_loc = GetShaderLocation(blob_shader, "screen_rect");
 
   gp->circles_tex_loc = GetShaderLocation(gp->blob_shader, "circles_tex");
   gp->circles_count_loc = GetShaderLocation(gp->blob_shader, "circles_count");
+  gp->shader_dt_loc = GetShaderLocation(gp->blob_shader, "dt");
 
   //Image white_img = GenImageColor(1, 1, WHITE);
   //Texture2D white_tex = LoadTextureFromImage(white_img);
@@ -162,11 +177,152 @@ void game_unload_assets(Game* gp) {
 
 }
 
+Color color_from_hexcode(Str8 hexcode) {
+
+  u8 components[4] = { 0, 0, 0, 0xff, };
+
+  int i = 0; 
+  if(hexcode.s[0] == '#') {
+    i++;
+  }
+  for(int c = 0; i < hexcode.len; i += 2, c++) {
+    u8 a = hexcode.s[i];
+    u8 b = hexcode.s[i+1];
+
+    components[c] = (hexdigit_to_int(a) << 4) + hexdigit_to_int(b);
+  }
+
+  Color result = { .r = components[0], .g = components[1], .b = components[2], .a = components[3] };
+
+  return result;
+}
+
 void game_update_and_draw(Game* gp) {
+  gp->dt = Clamp(GetFrameTime(), MIN_DT, TARGET_DT);
+  gp->shader_dt += gp->dt;
 
   if(WindowShouldClose()) {
     gp->quit = 1;
     return;
+  }
+
+  if(!gp->created_balls) {
+    gp->created_balls = 1;
+    Circle circles[] = {
+      { .color = color_from_hexcode(str8_lit("#f700ce")), .center = { 300, 500, }, .radius = 90, .softness = 10.f, },
+      { .color = color_from_hexcode(str8_lit("#a400f7")), .center = { 380, 770, }, .radius = 130, .softness = 10.f, },
+      { .color = color_from_hexcode(str8_lit("#f70052")), .center = { 500, 700, }, .radius = 65,  .softness = 10.f,  },
+      //{ .color = GREEN , .center = {0 }, },
+      //{ .color = YELLOW, .center = {0 }, },
+    };
+
+    gp->circles_count = ARRLEN(circles);
+
+    Vector2 dir = {0, 1};
+
+    for(int i = 0; i < gp->circles_count; i++) {
+      Circle *c = &circles[i];
+
+      c->vel = Vector2Scale(
+          Vector2Rotate(dir, get_random_float(0, 2*PI, 30)),
+          get_random_float(300, 600, 15) );
+      c->friction = get_random_float(0.5, 1.4, 15);
+
+      c->mass = MASS_TO_RAD * c->radius;
+
+    }
+
+    memory_copy(gp->circles_buf, circles, sizeof(circles));
+
+  }
+
+  // TODO make the balls get attracted towards the top and bottom of the screen, that way they'll keep moving
+  { /* update balls */
+
+    if(IsKeyPressed(KEY_F5)) {
+      gp->created_balls = 0;
+    }
+
+    if(IsKeyPressed(KEY_ESCAPE)) {
+      gp->paused = !gp->paused;
+    }
+
+    if(gp->paused) {
+      goto update_end;
+    }
+
+    for(int i = 0; i < gp->circles_count; i++) {
+
+      Circle *c = &gp->circles_buf[i];
+
+      c->accel = (Vector2){0};
+      for(int j = 0; j < gp->circles_count; j++) {
+        if(j == i) continue;
+
+        Circle other_c = gp->circles_buf[j];
+
+        float r_sqr = fmaxf(1e-3, Vector2DistanceSqr(c->center, other_c.center));
+        float inv_r_sqr = 1.0f/r_sqr;
+        float inv_r = sqrtf(inv_r_sqr);
+        Vector2 dir = Vector2Scale(Vector2Subtract(other_c.center, c->center), inv_r);
+        Vector2 neg_dir = Vector2Negate(dir);
+        float g = 2.3*log2(G*other_c.mass*(inv_r_sqr*0.1));
+        float neg_g = 11.4*log2(G*other_c.mass*inv_r_sqr*6e-1);
+        c->accel = Vector2Add(c->accel, Vector2Scale(dir, g));
+        c->accel = Vector2Add(c->accel, Vector2Scale(neg_dir, neg_g));
+
+      }
+
+      Vector2 a_X_dt = Vector2Scale(c->accel, gp->dt);
+      c->vel = Vector2Add(c->vel, a_X_dt);
+
+      c->vel = Vector2ClampValue(c->vel, 80, 1400);
+
+      if(Vector2LengthSqr(c->vel) > SQUARE(27.0)) {
+        c->vel = Vector2Subtract(c->vel, Vector2Scale(c->vel, c->friction*gp->dt));
+      }
+      Vector2 new_p = c->center;
+      new_p = Vector2Add(new_p, Vector2Scale(c->vel, gp->dt));
+      new_p = Vector2Add(new_p, Vector2Scale(a_X_dt, gp->dt*0.5));
+
+      {
+
+        float r = c->radius;
+        new_p.x = fminf((float)GetScreenWidth() - r, fmaxf(r, new_p.x));
+        new_p.y = fminf((float)GetScreenHeight() - r, fmaxf(r, new_p.y));
+
+      }
+
+      c->center = new_p;
+
+      {
+        Vector2 p = c->center;
+        float r = c->radius;
+        if(!(p.x > r && p.y > r && p.x < (float)GetScreenWidth() - r && p.y < (float)GetScreenHeight() - r)) {
+
+          c->vel = Vector2Negate(c->vel);
+          c->vel = Vector2Rotate(c->vel, get_random_float(-PI*0.05, PI*0.05, 10));
+          //c->vel = Vector2Scale(c->vel, get_random_float(1.02, 1.1, 10));
+        }
+      }
+
+
+    }
+
+update_end:;
+  } /* update balls */
+
+  for(int i = 0; i < gp->circles_count; i++) {
+    Circle c = gp->circles_buf[i];
+    Vector4 color = ColorNormalize(c.color);
+    gp->gpu_circles_buf[i].center_x = (u16)FloatToHalf(c.center.x);
+    gp->gpu_circles_buf[i].center_y = (u16)FloatToHalf((float)GetScreenHeight()-c.center.y);
+    gp->gpu_circles_buf[i].radius   = (u16)FloatToHalf(c.radius);
+    gp->gpu_circles_buf[i].softness = (u16)FloatToHalf(c.softness);
+    gp->gpu_circles_buf[i].color_x  = (u16)FloatToHalf(color.x);
+    gp->gpu_circles_buf[i].color_y  = (u16)FloatToHalf(color.y);
+    gp->gpu_circles_buf[i].color_z  = (u16)FloatToHalf(color.z);
+    gp->gpu_circles_buf[i].color_w  = (u16)FloatToHalf(color.w);
   }
 
   UpdateTexture(gp->circles_tex, gp->gpu_circles_buf);
@@ -184,17 +340,31 @@ void game_update_and_draw(Game* gp) {
       //SetShaderValue(blob_shader, screen_rect_loc, &screen_rect, SHADER_UNIFORM_VEC4);
       SetShaderValueTexture(gp->blob_shader, gp->circles_tex_loc, gp->circles_tex);
       SetShaderValue(gp->blob_shader, gp->circles_count_loc, &(gp->circles_count), SHADER_UNIFORM_INT);
+      SetShaderValue(gp->blob_shader, gp->shader_dt_loc, &(gp->shader_dt), SHADER_UNIFORM_FLOAT);
 
       DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), WHITE);
       //{
       //  Rectangle src = { 0, 0, 1, 1 }; // use full texture
-      //  Rectangle dst = { 0, 0, GetScreenWidth(), GetScreenHeight() };
+      //  Rectangle dst = { 0, 0, GetScreenWidth(), -(float)GetScreenHeight() };
       //  Vector2 origin = { 0, 0 };
 
-      //  DrawTexturePro(white_tex, src, dst, origin, 0.0f, WHITE);
+      //  DrawTexturePro(gp->white_tex, src, dst, origin, 0.0f, WHITE);
       //}
 
     }
+
+#if 0
+    for(int i = 0; i < gp->circles_count; i++) {
+      Circle *c = &gp->circles_buf[i];
+
+      Vector2 accel_line_end = Vector2Add(c->center,
+          Vector2Scale(Vector2Normalize(c->accel), 100.0));
+
+      DrawLineEx(c->center, accel_line_end, 2.0, WHITE);
+      DrawCircleLinesV(c->center, c->radius, WHITE);
+    }
+    DrawFPS(10, 10);
+#endif
 
   }
 

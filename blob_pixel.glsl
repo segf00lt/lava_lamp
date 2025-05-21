@@ -5,6 +5,7 @@ in vec2 fragTexCoord;
 out vec4 finalColor;
 
 //uniform vec4 screen_rect;
+uniform float dt;
 uniform sampler2D circles_tex;
 uniform int circles_count;
 
@@ -49,11 +50,20 @@ Circle get_circle(int i) {
 //}
 
 // cubic polynomial
-float smin( float a, float b, float k )
-{
-    k *= 6.0;
-    float h = max( k-abs(a-b), 0.0 )/k;
-    return min(a,b) - h*h*h*k*(1.0/6.0);
+//float smin( float a, float b, float k )
+//{
+//    k *= 6.0;
+//    float h = max( k-abs(a-b), 0.0 )/k;
+//    return min(a,b) - h*h*h*k*(1.0/6.0);
+//}
+
+// cubic polynomial
+vec2 smin(float a, float b, float k) {
+    float h = 1.0 - min( abs(a-b)/(6.0*k), 1.0 );
+    float w = h*h*h;
+    float m = w*0.5;
+    float s = w*k; 
+    return (a<b) ? vec2(a-s,m) : vec2(b-s,1.0-m);
 }
 
 float circle_sdf(vec2 p, Circle circle) {
@@ -70,17 +80,47 @@ float circle_sdf(vec2 p, Circle circle) {
 }
 
 void main() {
-  Circle c1 = get_circle(0);
-  Circle c2 = get_circle(1);
+  vec2 frag_coord = gl_FragCoord.xy;
 
-  float d1 = length(gl_FragCoord.xy  - c1.center) - c1.radius;
-  float d2 = length(gl_FragCoord.xy  - c2.center) - c2.radius;
+  Circle c0 = get_circle(0);
+  float softness = 1.8;
+  //softness += (softness*0.4)*exp(sin(dt*1.6)+1);
+  float k = 65.6;
+  vec4 color = c0.color;
+  float d = 1e9;
 
-  float d = smin(d1, d2, 13.3);
-  float softness = 15.0;
+  for(int i = 0; i < circles_count; i++) {
+    Circle c = get_circle(i);
+
+    //float radius = c.radius + (c.radius*0.1)*(sin(dt*3.0)+1);
+    float radius = c.radius;
+    float di = length(frag_coord - c.center) - radius;
+    vec2 result = smin(d, di, k);
+    d = result.x;
+    float blend = result.y;
+
+    color  = mix(color, c.color, blend);
+
+  }
+
   float alpha = 1.0 - smoothstep(0.0, softness, d);
+  finalColor = vec4(color.rgb, alpha);
 
-  finalColor = vec4(vec3(0.4, 0.8, 0.2), alpha);
+  //Circle c1 = get_circle(0);
+  //Circle c2 = get_circle(1);
+
+  //float d1 = length(frag_coord - c1.center) - c1.radius;
+  //float d2 = length(frag_coord - c2.center) - c2.radius;
+
+  //float d = smin(d1, d2, 13.3);
+  //float softness = 15.0;
+  //float alpha = 1.0 - smoothstep(0.0, softness, d);
+
+  //vec2 dir = c2.center - c1.center;
+  //vec3 color = mix(c1.color.rgb, c2.color.rgb, 0.7);
+
+  //finalColor = vec4(vec3(0.4, 0.8, 0.2), alpha);
+  //finalColor = vec4(color, alpha);
 
   //vec4 result = vec4(1.0);
 
