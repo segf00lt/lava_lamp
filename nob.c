@@ -693,8 +693,8 @@ int bootstrap_project(void) {
 
     ASSERT(nob_mkdir_if_not_exists(".vscode"));
 
-    ASSERT(nob_write_entire_file("./vscode/launch.json", vscode_launch, STRLEN(vscode_launch)));
-    ASSERT(nob_write_entire_file("./vscode/settings.json", vscode_settings, STRLEN(vscode_settings)));
+    ASSERT(nob_write_entire_file(".vscode/launch.json", vscode_launch, STRLEN(vscode_launch)));
+    ASSERT(nob_write_entire_file(".vscode/settings.json", vscode_settings, STRLEN(vscode_settings)));
 
   } /* gen vscode project stuff */
 
@@ -750,7 +750,7 @@ int main(int argc, char **argv) {
 
   context_init();
 
-#if 0
+#if 1
   {
 
     NOB_GO_REBUILD_URSELF(argc, argv);
