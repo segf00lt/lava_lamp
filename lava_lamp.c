@@ -25,8 +25,9 @@
 #define SCREEN_BOTTOM_RIGHT ((Vector2){ (float)GetScreenWidth(), (float)GetScreenHeight(), })
 #define SCREEN_BOTTOM_LEFT ((Vector2){ 0, (float)GetScreenHeight(), })
 
-#define G ((float)20.0)
-#define MASS_TO_RAD ((float)300.23)
+#define G ((float)50.0)
+#define MASS_TO_RADIUS ((float)300.23)
+#define FRICTION_TO_RADIUS ((float)2e-3)
 
 
 /* * * * * * * * * * *
@@ -43,6 +44,7 @@ typedef struct Circle {
   f32     radius;
   f32     softness;
   Color   color;
+
 } Circle;
 
 typedef struct GPU_circle {
@@ -77,6 +79,9 @@ typedef struct Game {
 
   bool paused;
 
+  Arena *main_arena;
+  Arena *frame_arena;
+
 } Game;
 
 STATIC_ASSERT(MB(1) >= sizeof(Game), game_state_struct_is_less_than_1_megabyte);
@@ -86,6 +91,9 @@ u64 game_state_size = MAX(MB(1), sizeof(Game));
 /* * * * * * * * * * *
  * globals
  */
+
+Matrix mat_rotate_pi_over_4;
+b32 cached_mat_rotate_pi_over_4;
 
 
 /* * * * * * * * * * *
@@ -144,6 +152,9 @@ Game *game_init(void) {
   Image white_tex_img = GenImageColor(1, 1, WHITE);
   gp->white_tex = LoadTextureFromImage(white_tex_img);
   UnloadImage(white_tex_img);
+
+  gp->main_arena = arena_alloc(.size = KB(20));
+  gp->frame_arena = arena_alloc(.size = KB(4));
 
   //int screen_rect_loc = GetShaderLocation(blob_shader, "screen_rect");
 
@@ -209,9 +220,12 @@ void game_update_and_draw(Game* gp) {
   if(!gp->created_balls) {
     gp->created_balls = 1;
     Circle circles[] = {
-      { .color = color_from_hexcode(str8_lit("#f700ce")), .center = { 300, 500, }, .radius = 90, .softness = 10.f, },
-      { .color = color_from_hexcode(str8_lit("#a400f7")), .center = { 380, 770, }, .radius = 130, .softness = 10.f, },
-      { .color = color_from_hexcode(str8_lit("#f70052")), .center = { 500, 700, }, .radius = 65,  .softness = 10.f,  },
+      { .color = color_from_hexcode(str8_lit("#f700ce")),
+        .center = { SCREEN_SIZE.x*0.5, SCREEN_SIZE.y*0.4, }, .radius = 110, .softness = 10.f, },
+      { .color = color_from_hexcode(str8_lit("#a400f7")),
+        .center = { SCREEN_SIZE.x*0.654, SCREEN_SIZE.y*0.66, }, .radius = 150, .softness = 10.f, },
+      { .color = color_from_hexcode(str8_lit("#f70052")),
+        .center = { SCREEN_SIZE.x*0.83, SCREEN_SIZE.y*0.5, }, .radius = 85,  .softness = 10.f,  },
       //{ .color = GREEN , .center = {0 }, },
       //{ .color = YELLOW, .center = {0 }, },
     };
@@ -226,9 +240,10 @@ void game_update_and_draw(Game* gp) {
       c->vel = Vector2Scale(
           Vector2Rotate(dir, get_random_float(0, 2*PI, 30)),
           get_random_float(300, 600, 15) );
-      c->friction = get_random_float(0.5, 1.4, 15);
 
-      c->mass = MASS_TO_RAD * c->radius;
+      c->friction = c->radius*FRICTION_TO_RADIUS;
+
+      c->mass = c->radius*MASS_TO_RADIUS;
 
     }
 
@@ -266,8 +281,8 @@ void game_update_and_draw(Game* gp) {
         float inv_r = sqrtf(inv_r_sqr);
         Vector2 dir = Vector2Scale(Vector2Subtract(other_c.center, c->center), inv_r);
         Vector2 neg_dir = Vector2Negate(dir);
-        float g = 2.3*log2(G*other_c.mass*(inv_r_sqr*0.1));
-        float neg_g = 11.4*log2(G*other_c.mass*inv_r_sqr*6e-1);
+        float g = 2.2*log2(G*other_c.mass*inv_r_sqr*70.0);
+        float neg_g = 11.4*log2(G*other_c.mass*inv_r_sqr*3e-1);
         c->accel = Vector2Add(c->accel, Vector2Scale(dir, g));
         c->accel = Vector2Add(c->accel, Vector2Scale(neg_dir, neg_g));
 
@@ -300,8 +315,16 @@ void game_update_and_draw(Game* gp) {
         float r = c->radius;
         if(!(p.x > r && p.y > r && p.x < (float)GetScreenWidth() - r && p.y < (float)GetScreenHeight() - r)) {
 
-          c->vel = Vector2Negate(c->vel);
-          c->vel = Vector2Rotate(c->vel, get_random_float(-PI*0.05, PI*0.05, 10));
+          if(p.x == r || p.x == (float)GetScreenWidth() - r) {
+            c->vel.x *= -1;
+          }
+
+          if(p.y == r || p.y == (float)GetScreenHeight() - r) {
+            c->vel.y *= -1;
+          }
+
+          //c->vel = Vector2Negate(c->vel);
+          //c->vel = Vector2Rotate(c->vel, get_random_float(-PI*0.05, PI*0.05, 10));
           //c->vel = Vector2Scale(c->vel, get_random_float(1.02, 1.1, 10));
         }
       }
@@ -357,14 +380,34 @@ update_end:;
     for(int i = 0; i < gp->circles_count; i++) {
       Circle *c = &gp->circles_buf[i];
 
+      Str8 circle_info_text = push_str8f(gp->frame_arena,
+          "scalar vel: %f\nmass: %f\nfriction: %f\n",
+          Vector2Length(c->vel), c->mass, c->friction);
+      Vector2 circle_info_text_offset =
+      {
+        .x = 0, .y = -1,
+      };
+      if(!cached_mat_rotate_pi_over_4) {
+        cached_mat_rotate_pi_over_4 = true;
+        mat_rotate_pi_over_4 = MatrixRotate((Vector3){.z = 1}, -PI*.25);
+      }
+      circle_info_text_offset = Vector2Transform(circle_info_text_offset, mat_rotate_pi_over_4);
+      Vector2 circle_info_text_pos = Vector2Add(c->center, Vector2Scale(circle_info_text_offset, c->radius*1.14));
+
+      DrawTextEx(GetFontDefault(), (char*)circle_info_text.s, circle_info_text_pos, 20, 2, WHITE);
+
+      DrawCircleLinesV(c->center, c->radius, GREEN);
+
       Vector2 accel_line_end = Vector2Add(c->center,
           Vector2Scale(Vector2Normalize(c->accel), 100.0));
 
       DrawLineEx(c->center, accel_line_end, 2.0, WHITE);
-      DrawCircleLinesV(c->center, c->radius, WHITE);
+
     }
     DrawFPS(10, 10);
 #endif
+
+    arena_clear(gp->frame_arena);
 
   }
 
