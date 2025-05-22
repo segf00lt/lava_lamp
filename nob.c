@@ -54,6 +54,33 @@ char vim_project_file[] =
 #error "unsupported operating system"
 #endif
 
+char vscode_launch[] =
+"{\n"
+"    // Use IntelliSense to learn about possible attributes.\n"
+"    // Hover to view descriptions of existing attributes.\n"
+"    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387\n"
+"    \"version\": \"0.2.0\",\n"
+"    \"configurations\": [\n"
+"    {\n"
+"        \"name\": \"(lldb) Launch\",\n"
+"        \"type\": \"cppdbg\",\n"
+"        \"request\": \"launch\",\n"
+"        \"program\": \"${workspaceFolder}/lava_lamp\",\n"
+"        \"args\": [],\n"
+"        \"stopAtEntry\": false,\n"
+"        \"cwd\": \"${workspaceFolder}\",\n"
+"        \"environment\": [],\n"
+"        \"externalConsole\": false,\n"
+"        \"MIMode\": \"lldb\"\n"
+"    }\n"
+"]\n"
+"}\n";
+
+char vscode_settings[] =
+"{\n"
+"    \"cmake.ignoreCMakeListsMissing\": true,\n"
+"    \"C_Cpp.errorSquiggles\": \"disabled\"\n"
+"}\n";
 
 #define CC "clang"
 #define DEV_FLAGS "-g", "-O0", "-Wall", "-Wpedantic", "-Werror", "-Wno-switch", "-Wno-comment", "-Wno-format-pedantic", "-Wno-initializer-overrides", "-Wno-extra-semi", "-D_UNITY_BUILD_", "-DDEBUG"
@@ -240,8 +267,8 @@ char *_raylib_ldflags_linux[] = {
 };
 
 char *_raylib_include_flags[] = {
-  "-I.",
-  "-Iexternal/glfw/include",
+  "-I./third_party/raylib",
+  "-I./third_party/raylib/external/glfw/include",
 };
 
 Str8 _raylib_files[] = {
@@ -334,11 +361,12 @@ int build_raylib(void) {
   Str8 raylib_debug_build_dir = scratch_push_str8f("%S/debug", raylib_build_dir);
   Str8 raylib_web_build_dir = scratch_push_str8f("%S/web", raylib_build_dir);
 
-  ASSERT(nob_mkdir_if_not_exists(raylib_build_dir.s));
-  ASSERT(nob_mkdir_if_not_exists(raylib_static_build_dir.s));
-  ASSERT(nob_mkdir_if_not_exists(raylib_shared_build_dir.s));
-  ASSERT(nob_mkdir_if_not_exists(raylib_debug_build_dir.s));
-  ASSERT(nob_mkdir_if_not_exists(raylib_web_build_dir.s));
+  // TODO os_mkdir()
+  ASSERT(nob_mkdir_if_not_exists((char*)raylib_build_dir.s));
+  ASSERT(nob_mkdir_if_not_exists((char*)raylib_static_build_dir.s));
+  ASSERT(nob_mkdir_if_not_exists((char*)raylib_shared_build_dir.s));
+  ASSERT(nob_mkdir_if_not_exists((char*)raylib_debug_build_dir.s));
+  ASSERT(nob_mkdir_if_not_exists((char*)raylib_web_build_dir.s));
 
   Str8 raylib_static_lib_path = scratch_push_str8f("%S/libraylib.a", raylib_static_build_dir);
   Str8 raylib_shared_lib_path = scratch_push_str8f("%S/%S", raylib_shared_build_dir, raylib_shared_lib_name);
@@ -362,16 +390,16 @@ int build_raylib(void) {
 
   Build builds[] = {
     { .kind = BUILD_KIND_STATIC,
-      .compiler = "clang", .dir = raylib_static_build_dir, .files = raylib_files, .cflags = raylib_cflags },
+      .compiler = CC, .dir = raylib_static_build_dir, .files = raylib_files, .cflags = raylib_cflags },
 
     { .kind = BUILD_KIND_SHARED,
-      .compiler = "clang", .dir = raylib_shared_build_dir, .files = raylib_files, .cflags = raylib_cflags },
+      .compiler = CC, .dir = raylib_shared_build_dir, .files = raylib_files, .cflags = raylib_cflags },
 
     { .kind = BUILD_KIND_DEBUG,
-      .compiler = "clang", .dir = raylib_debug_build_dir, .files = raylib_files, .cflags = raylib_debug_cflags },
+      .compiler = CC, .dir = raylib_debug_build_dir, .files = raylib_files, .cflags = raylib_debug_cflags },
 
     { .kind = BUILD_KIND_WEB,
-      .compiler = "emcc", .dir = raylib_web_build_dir, .files = raylib_files_web, .cflags = raylib_cflags_web },
+      .compiler = EMCC, .dir = raylib_web_build_dir, .files = raylib_files_web, .cflags = raylib_cflags_web },
   };
 
   Arr(Str8) object_files;
@@ -487,6 +515,7 @@ int build_raylib(void) {
 
   for(int i = 0; i < compile_cmds.count; i++) {
     arr_push(procs, nob_cmd_run_async(compile_cmds.d[i]));
+    //ASSERT(nob_proc_wait(procs.d[i]));
   }
 
   for(int i = 0; i < procs.count; i++) {
@@ -660,9 +689,18 @@ int bootstrap_project(void) {
 
   gen_vim_project_file();
 
+  { /* gen vscode project stuff */
+
+    ASSERT(nob_mkdir_if_not_exists(".vscode"));
+
+    ASSERT(nob_write_entire_file("./vscode/launch.json", vscode_launch, STRLEN(vscode_launch)));
+    ASSERT(nob_write_entire_file("./vscode/settings.json", vscode_settings, STRLEN(vscode_settings)));
+
+  } /* gen vscode project stuff */
+
   if(!build_raylib()) return 0;
   if(!build_metaprogram()) return 0;
-  if(!build_hot_reload_cradle) return 0;
+  if(!build_hot_reload()) return 0;
 
   return 1;
 }

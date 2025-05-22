@@ -335,17 +335,36 @@ void game_update_and_draw(Game* gp) {
 update_end:;
   } /* update balls */
 
+  // TODO figure out how to properly account for the mac's retina display
+#if defined(OS_MAC)
+  Vector2 dpi_scale_factor = GetWindowScaleDPI();
+  float scalar_dpi_scale_factor = 0.70*Vector2Length(dpi_scale_factor);
+#elif defined(OS_LINUX)
+  Vector2 dpi_scale_factor = { 1, 1 };
+  float scalar_dpi_scale_factor = 1;
+#endif
+
   for(int i = 0; i < gp->circles_count; i++) {
+
     Circle c = gp->circles_buf[i];
+
     Vector4 color = ColorNormalize(c.color);
-    gp->gpu_circles_buf[i].center_x = (u16)FloatToHalf(c.center.x);
-    gp->gpu_circles_buf[i].center_y = (u16)FloatToHalf((float)GetScreenHeight()-c.center.y);
-    gp->gpu_circles_buf[i].radius   = (u16)FloatToHalf(c.radius);
-    gp->gpu_circles_buf[i].softness = (u16)FloatToHalf(c.softness);
+
+    Vector2 center = { c.center.x, (float)GetScreenHeight() - c.center.y };
+    center = Vector2Multiply(center, dpi_scale_factor);
+
+    float radius = scalar_dpi_scale_factor*c.radius;
+    float softness = scalar_dpi_scale_factor*c.softness;
+
+    gp->gpu_circles_buf[i].center_x = (u16)FloatToHalf(center.x);
+    gp->gpu_circles_buf[i].center_y = (u16)FloatToHalf(center.y);
+    gp->gpu_circles_buf[i].radius   = (u16)FloatToHalf(radius);
+    gp->gpu_circles_buf[i].softness = (u16)FloatToHalf(softness);
     gp->gpu_circles_buf[i].color_x  = (u16)FloatToHalf(color.x);
     gp->gpu_circles_buf[i].color_y  = (u16)FloatToHalf(color.y);
     gp->gpu_circles_buf[i].color_z  = (u16)FloatToHalf(color.z);
     gp->gpu_circles_buf[i].color_w  = (u16)FloatToHalf(color.w);
+
   }
 
   UpdateTexture(gp->circles_tex, gp->gpu_circles_buf);
